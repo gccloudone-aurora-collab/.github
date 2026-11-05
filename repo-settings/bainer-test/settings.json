@@ -1,5 +1,6 @@
 {
   "name": "bainer-test",
+  "auto_init": true,
   "private": false,
   "visibility": "public",
   "description": "Shared repo to manage the organization features used here ",
