@@ -1,0 +1,6 @@
+{
+  "state": "configured",
+  "query_suite": "extended",
+  "threat_model": "remote",
+  "runner_type": "standard"
+}
