@@ -8,7 +8,8 @@ on:
     branches:
       - main
     paths:
-      - "repo-settings/**/settings.json"
+      - "repo-settings/**"
+      - ".github/workflows/test.yaml"
   workflow_dispatch:
 
 permissions: {}
@@ -98,3 +99,56 @@ jobs:
 
               echo "Repository settings applied: $repo"
             done
+
+      - name: Update security settings
+        env:
+          GH_TOKEN: ${{ steps.create_token.outputs.token }}
+        shell: bash
+        run: |
+          tail -n +2 "$RUNNER_TEMP/repo-configs.csv" |
+            while IFS=, read -r repo file; do
+              security_file="$(dirname "$file")/security.json"
+      
+              if [[ ! -f "$security_file" ]]; then
+                continue
+              fi
+      
+              echo "Updating security settings: $repo"
+      
+              jq --slurpfile settings "$file" '
+                if $settings[0].private == false then
+                  del(.security_and_analysis.advanced_security)
+                else
+                  .
+                end
+              ' "$security_file" |
+                gh api --method PATCH \
+                  "repos/${GITHUB_REPOSITORY_OWNER}/${repo}" \
+                  --input - --silent
+      
+              echo "Security settings applied: $repo"
+            done
+
+
+      - name: Update CodeQL settings
+        env:
+          GH_TOKEN: ${{ steps.create_token.outputs.token }}
+        shell: bash
+        run: |
+          tail -n +2 "$RUNNER_TEMP/repo-configs.csv" |
+            while IFS=, read -r repo file; do
+              codeql_file="$(dirname "$file")/codeql.json"
+      
+              if [[ ! -f "$codeql_file" ]]; then
+                continue
+              fi
+      
+              echo "Updating CodeQL settings: $repo"
+      
+              gh api --method PATCH \
+                "repos/${GITHUB_REPOSITORY_OWNER}/${repo}/code-scanning/default-setup" \
+                --input "$codeql_file" --silent
+      
+              echo "CodeQL settings applied: $repo"
+            done
+
