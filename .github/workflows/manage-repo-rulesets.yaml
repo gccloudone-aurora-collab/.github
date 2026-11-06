@@ -117,10 +117,10 @@ jobs:
 
               echo "Creating ruleset: $repo / $name"
 
-              jq 'del(.repository)' "$file" |
+              jq 'del(.repository, .source_type)' "$file" |
                 gh api --method POST \
                   "repos/${GITHUB_REPOSITORY_OWNER}/${repo}/rulesets" \
-                  --input - --silent
+                  --input -
 
               echo "Ruleset created: $repo / $name"
             done
