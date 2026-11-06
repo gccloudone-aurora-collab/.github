@@ -21,7 +21,6 @@ concurrency:
 jobs:
   deploy_rulesets:
     runs-on: ubuntu-latest
-    environment: org-repo-settings
 
     permissions:
       contents: read
