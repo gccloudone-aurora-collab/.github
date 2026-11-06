@@ -1,0 +1,174 @@
+
+name: Branch Protection Rulesets
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  push:
+    branches:
+      - main
+    paths:
+      - "repo-rulesets/**"
+      - ".github/workflows/manage-repo-rulesets.yaml"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: manage-repository-rulesets
+  cancel-in-progress: false
+
+jobs:
+  deploy_rulesets:
+    runs-on: ubuntu-latest
+    environment: org-repo-settings
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Create App token
+        id: create_token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.ORG_REPO_MANAGER_ID }}
+          private-key: ${{ secrets.ORG_REPO_MANAGER_KEY }}
+          owner: ${{ github.repository_owner }} # zizmor: ignore[github-app] Organization-wide ruleset management requires this scope
+          permission-administration: write
+
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build config inventory
+        shell: bash
+        run: |
+          configs="$RUNNER_TEMP/ruleset-configs.csv"
+
+          echo "repo,file" > "$configs"
+
+          find repo-rulesets -type f -name '*.json' | sort |
+            while IFS= read -r file; do
+              repo=$(jq -er '.repository' "$file")
+              echo "$repo,$file"
+            done >> "$configs"
+
+          echo "Ruleset configuration inventory:"
+          cat "$configs"
+
+      - name: Build existing repository inventory
+        env:
+          GH_TOKEN: ${{ steps.create_token.outputs.token }}
+        shell: bash
+        run: |
+          gh api --paginate \
+            "orgs/${GITHUB_REPOSITORY_OWNER}/repos?per_page=100&type=all" \
+            --jq '.[].name' > "$RUNNER_TEMP/existing-repos.txt"
+
+          echo "Existing repositories:"
+          cat "$RUNNER_TEMP/existing-repos.txt"
+
+      - name: Build existing ruleset inventory
+        env:
+          GH_TOKEN: ${{ steps.create_token.outputs.token }}
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/existing-rulesets"
+
+          tail -n +2 "$RUNNER_TEMP/ruleset-configs.csv" |
+            cut -d, -f1 | sort -u |
+            while IFS= read -r repo; do
+              if ! grep -Fxiq "$repo" "$RUNNER_TEMP/existing-repos.txt"; then
+                echo "Repository does not exist: $repo"
+                continue
+              fi
+
+              echo "Retrieving existing rulesets: $repo"
+
+              gh api --paginate --slurp \
+                "repos/${GITHUB_REPOSITORY_OWNER}/${repo}/rulesets?per_page=100&includes_parents=false" |
+                jq 'add' > "$RUNNER_TEMP/existing-rulesets/$repo.json"
+
+              echo "Existing rulesets for $repo:"
+              cat "$RUNNER_TEMP/existing-rulesets/$repo.json"
+            done
+
+      - name: Create missing rulesets
+        env:
+          GH_TOKEN: ${{ steps.create_token.outputs.token }}
+        shell: bash
+        run: |
+          tail -n +2 "$RUNNER_TEMP/ruleset-configs.csv" |
+            while IFS=, read -r repo file; do
+              if [[ ! -f "$RUNNER_TEMP/existing-rulesets/$repo.json" ]]; then
+                continue
+              fi
+
+              name=$(jq -r '.name' "$file")
+
+              id=$(jq -r --arg name "$name" '
+                .[] | select(.name == $name) | .id
+              ' "$RUNNER_TEMP/existing-rulesets/$repo.json")
+
+              if [[ -n "$id" ]]; then
+                echo "Ruleset already exists: $repo / $name"
+                continue
+              fi
+
+              echo "Creating ruleset: $repo / $name"
+
+              jq 'del(.repository, .source_type)' "$file" |
+                gh api --method POST \
+                  "repos/${GITHUB_REPOSITORY_OWNER}/${repo}/rulesets" \
+                  --input - --silent
+
+              echo "Ruleset created: $repo / $name"
+            done
+
+      - name: Replace existing rulesets
+        env:
+          GH_TOKEN: ${{ steps.create_token.outputs.token }}
+        shell: bash
+        run: |
+          tail -n +2 "$RUNNER_TEMP/ruleset-configs.csv" |
+            while IFS=, read -r repo file; do
+              if [[ ! -f "$RUNNER_TEMP/existing-rulesets/$repo.json" ]]; then
+                continue
+              fi
+
+              name=$(jq -r '.name' "$file")
+
+              id=$(jq -r --arg name "$name" '
+                .[] | select(.name == $name) | .id
+              ' "$RUNNER_TEMP/existing-rulesets/$repo.json")
+
+              if [[ -z "$id" ]]; then
+                continue
+              fi
+
+              old_name="${name}-previous-${id}"
+
+              echo "Renaming existing ruleset: $repo / $name"
+
+              gh api --method PUT \
+                "repos/${GITHUB_REPOSITORY_OWNER}/${repo}/rulesets/$id" \
+                -f name="$old_name" --silent
+
+              echo "Creating replacement ruleset: $repo / $name"
+
+              jq 'del(.repository, .source_type)' "$file" |
+                gh api --method POST \
+                  "repos/${GITHUB_REPOSITORY_OWNER}/${repo}/rulesets" \
+                  --input - --silent
+
+              echo "Replacement ruleset created: $repo / $name"
+
+              echo "Deleting previous ruleset: $repo / $old_name"
+
+              gh api --method DELETE \
+                "repos/${GITHUB_REPOSITORY_OWNER}/${repo}/rulesets/$id" \
+                --silent
+
+              echo "Ruleset replaced: $repo / $name"
+            done
