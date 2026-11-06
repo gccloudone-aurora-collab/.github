@@ -117,7 +117,7 @@ jobs:
 
               echo "Creating ruleset: $repo / $name"
 
-              jq 'del(.repository, .source_type)' "$file" |
+              jq 'del(.repository)' "$file" |
                 gh api --method POST \
                   "repos/${GITHUB_REPOSITORY_OWNER}/${repo}/rulesets" \
                   --input - --silent
@@ -156,7 +156,7 @@ jobs:
 
               echo "Creating replacement ruleset: $repo / $name"
 
-              jq 'del(.repository, .source_type)' "$file" |
+              jq 'del(.repository)' "$file" |
                 gh api --method POST \
                   "repos/${GITHUB_REPOSITORY_OWNER}/${repo}/rulesets" \
                   --input - --silent
